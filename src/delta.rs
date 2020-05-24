@@ -5,12 +5,12 @@ use console::strip_ansi_codes;
 use std::io::BufRead;
 use unicode_segmentation::UnicodeSegmentation;
 
-use crate::cli;
+use crate::cli::unreachable;
 use crate::config::Config;
 use crate::draw;
 use crate::paint::Painter;
 use crate::parse;
-use crate::style::Style;
+use crate::style::{self, DecorationStyle, Style};
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum State {
@@ -74,7 +74,7 @@ where
         if line.starts_with("commit ") {
             painter.paint_buffered_lines();
             state = State::CommitMeta;
-            if config.commit_style != cli::SectionStyle::Plain {
+            if config.commit_style.decoration_style.is_some() {
                 painter.emit()?;
                 handle_commit_meta_header_line(&mut painter, &raw_line, config)?;
                 continue;
@@ -86,7 +86,7 @@ where
             // FIXME: For unified diff input, removal ("-") of a line starting with "--" (e.g. a
             // Haskell or SQL comment) will be confused with the "---" file metadata marker.
             && (line.starts_with("--- ") || line.starts_with("rename from "))
-            && config.file_style != cli::SectionStyle::Plain
+            && config.file_style.decoration_style.is_some()
         {
             minus_file = parse::get_file_path_from_file_meta_line(&line, source == Source::GitDiff);
             if source == Source::DiffUnified {
@@ -99,7 +99,7 @@ where
                 ));
             }
         } else if (line.starts_with("+++ ") || line.starts_with("rename to "))
-            && config.file_style != cli::SectionStyle::Plain
+            && config.file_style.decoration_style.is_some()
         {
             plus_file = parse::get_file_path_from_file_meta_line(&line, source == Source::GitDiff);
             painter.set_syntax(parse::get_file_extension_from_file_meta_line_file_path(
@@ -116,7 +116,7 @@ where
         } else if line.starts_with("@@") {
             state = State::HunkMeta;
             painter.set_highlighter();
-            if config.hunk_style != cli::SectionStyle::Plain {
+            if config.hunk_header_style.decoration_style.is_some() {
                 painter.emit()?;
                 handle_hunk_meta_line(&mut painter, &line, config)?;
                 continue;
@@ -140,7 +140,7 @@ where
 
             state = State::FileMeta;
             painter.paint_buffered_lines();
-            if config.file_style != cli::SectionStyle::Plain {
+            if config.file_style.decoration_style.is_some() {
                 painter.emit()?;
                 handle_generic_file_meta_header_line(&mut painter, &raw_line, config)?;
                 continue;
@@ -153,7 +153,7 @@ where
             continue;
         }
 
-        if state == State::FileMeta && config.file_style != cli::SectionStyle::Plain {
+        if state == State::FileMeta && config.file_style.decoration_style.is_some() {
             // The file metadata section is 4 lines. Skip them under non-plain file-styles.
             continue;
         } else {
@@ -190,17 +190,25 @@ fn handle_commit_meta_header_line(
     line: &str,
     config: &Config,
 ) -> std::io::Result<()> {
-    let draw_fn = match config.commit_style {
-        cli::SectionStyle::Box => draw::write_boxed_with_line,
-        cli::SectionStyle::Underline => draw::write_underlined,
-        cli::SectionStyle::Plain => panic!(),
-        cli::SectionStyle::Omit => return Ok(()),
+    let decoration_ansi_term_style;
+    let draw_fn = match config.commit_style.decoration_style {
+        Some(DecorationStyle::Box(style)) => {
+            decoration_ansi_term_style = style;
+            draw::write_boxed_with_line
+        }
+        Some(DecorationStyle::Underline(style)) => {
+            decoration_ansi_term_style = style;
+            draw::write_underlined
+        }
+        Some(DecorationStyle::Omit) => return Ok(()),
+        None => unreachable("Unreachable code path reached in handle_commit_meta_header_line."),
     };
     draw_fn(
         painter.writer,
         line,
         config.terminal_width,
-        config.commit_color,
+        config.commit_style.ansi_term_style,
+        decoration_ansi_term_style,
         true,
     )?;
     Ok(())
@@ -224,18 +232,28 @@ fn handle_generic_file_meta_header_line(
     line: &str,
     config: &Config,
 ) -> std::io::Result<()> {
-    let draw_fn = match config.file_style {
-        cli::SectionStyle::Box => draw::write_boxed_with_line,
-        cli::SectionStyle::Underline => draw::write_underlined,
-        cli::SectionStyle::Plain => panic!(),
-        cli::SectionStyle::Omit => return Ok(()),
+    let decoration_ansi_term_style;
+    let draw_fn = match config.file_style.decoration_style {
+        Some(DecorationStyle::Box(style)) => {
+            decoration_ansi_term_style = style;
+            draw::write_boxed_with_line
+        }
+        Some(DecorationStyle::Underline(style)) => {
+            decoration_ansi_term_style = style;
+            draw::write_underlined
+        }
+        Some(DecorationStyle::Omit) => return Ok(()),
+        None => {
+            unreachable("Unreachable code path reached in handle_generic_file_meta_header_line.")
+        }
     };
     writeln!(painter.writer)?;
     draw_fn(
         painter.writer,
-        &config.file_color.paint(line),
+        &config.file_style.ansi_term_style.paint(line),
         config.terminal_width,
-        config.file_color,
+        config.file_style.ansi_term_style,
+        decoration_ansi_term_style,
         false,
     )?;
     Ok(())
@@ -246,11 +264,18 @@ fn handle_hunk_meta_line(
     line: &str,
     config: &Config,
 ) -> std::io::Result<()> {
-    let draw_fn = match config.hunk_style {
-        cli::SectionStyle::Box => draw::write_boxed,
-        cli::SectionStyle::Underline => draw::write_underlined,
-        cli::SectionStyle::Plain => panic!(),
-        cli::SectionStyle::Omit => return Ok(()),
+    let decoration_ansi_term_style;
+    let draw_fn = match config.hunk_header_style.decoration_style {
+        Some(style::DecorationStyle::Box(style)) => {
+            decoration_ansi_term_style = style;
+            draw::write_boxed
+        }
+        Some(style::DecorationStyle::Underline(style)) => {
+            decoration_ansi_term_style = style;
+            draw::write_underlined
+        }
+        Some(style::DecorationStyle::Omit) => return Ok(()),
+        None => unreachable("Unreachable code path reached in handle_hunk_meta_line."),
     };
     let (raw_code_fragment, line_number) = parse::parse_hunk_metadata(&line);
     let lines = vec![prepare(raw_code_fragment, false, config)];
@@ -276,12 +301,17 @@ fn handle_hunk_meta_line(
             painter.writer,
             &painter.output_buffer,
             config.terminal_width,
-            config.hunk_color,
+            config.hunk_header_style.ansi_term_style,
+            decoration_ansi_term_style,
             false,
         )?;
         painter.output_buffer.clear();
     }
-    writeln!(painter.writer, "\n{}", config.hunk_color.paint(line_number))?;
+    writeln!(
+        painter.writer,
+        "\n{}",
+        config.hunk_header_style.ansi_term_style.paint(line_number)
+    )?;
     Ok(())
 }
 

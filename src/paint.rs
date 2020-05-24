@@ -395,6 +395,7 @@ mod superimpose_style_sections {
                     ..ansi_term::Style::new()
                 },
                 is_syntax_highlighted: true,
+                decoration_style: None,
             };
         }
         lazy_static! {
@@ -406,6 +407,7 @@ mod superimpose_style_sections {
                     ..ansi_term::Style::new()
                 },
                 is_syntax_highlighted: false,
+                decoration_style: None,
             };
         }
         lazy_static! {
@@ -417,6 +419,7 @@ mod superimpose_style_sections {
                     ..ansi_term::Style::new()
                 },
                 is_syntax_highlighted: true,
+                decoration_style: None,
             };
         }
 
